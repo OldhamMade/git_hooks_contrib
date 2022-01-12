@@ -31,12 +31,9 @@ defmodule Mix.Tasks.GitHooks.RunContrib do
 
     script_name
     |> script_to_module()
+    |> check_for_module!()
     |> apply(:run, args)
-    |> check!()
-  rescue
-    UndefinedFunctionError ->
-      Printer.error("No contrib script exists matching the name provided.")
-      error_exit()
+    |> check_result!()
   end
 
   defp script_to_module(name) do
@@ -48,8 +45,19 @@ defmodule Mix.Tasks.GitHooks.RunContrib do
     Module.concat(GitHooks.Contrib, "#{submodule}")
   end
 
-  defp check!(:ok), do: :ok
-  defp check!({:error, _reason}), do: error_exit()
+  defp check_for_module!(name) do
+    case Code.ensure_compiled(name) do
+      {:module, module} ->
+        module
+
+      {:error, _reason} ->
+        Printer.error("No contrib script exists matching the name provided.")
+        error_exit()
+    end
+  end
+
+  defp check_result!(:ok), do: :ok
+  defp check_result!({:error, _reason}), do: error_exit()
 
   defp error_exit(error_code \\ {:shutdown, 1}), do: exit(error_code)
 end
