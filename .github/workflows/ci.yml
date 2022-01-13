@@ -1,0 +1,203 @@
+name: CI
+
+on: push
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  MIX_ENV: "test"
+  VERSIONS_OTP: '24.x'
+  VERSIONS_ELIXIR: '1.13.x'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - elixir: 1.9.x
+            otp: 22.x
+          - elixir: 1.10.x
+            otp: 23.x
+          - elixir: 1.11.x
+            otp: 23.x
+          - elixir: 1.12.x
+            otp: 23.x
+          - elixir: 1.12.x
+            otp: 24.x
+          - elixir: 1.13.x
+            otp: 24.x
+
+    steps:
+      - name: "[Git] Checkout code"
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: "[Setup] Setup Elixir"
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{matrix.elixir}}
+          otp-version: ${{matrix.otp}}
+
+      - name: "[Setup] Cache Dependencies"
+        uses: actions/cache@v2
+        with:
+          path: |
+            deps
+            _build/test/lib
+          key: ${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-mix-test-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-mix-test-
+
+      - name: "[Build] Install Dependencies"
+        run: mix deps.get
+
+      - name: "[Build] Build Dependencies"
+        run: mix deps.compile
+
+      - name: "[Lint] Check formatting"
+        run: |
+          mix format --check-formatted
+
+      - name: "[Build] Build Project"
+        run: |
+          mix compile --warnings-as-errors
+
+  test:
+    needs: build
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - elixir: 1.9.x
+            otp: 22.x
+          - elixir: 1.10.x
+            otp: 23.x
+          - elixir: 1.11.x
+            otp: 23.x
+          - elixir: 1.12.x
+            otp: 23.x
+          - elixir: 1.12.x
+            otp: 24.x
+          - elixir: 1.13.x
+            otp: 24.x
+
+    steps:
+      - name: "[Git] Checkout code"
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: "[Setup] Setup Elixir"
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{matrix.elixir}}
+          otp-version: ${{matrix.otp}}
+
+      - name: "[Setup] Cache Dependencies"
+        uses: actions/cache@v2
+        with:
+          path: |
+            deps
+            _build/test/lib
+          key: ${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-mix-test-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-mix-test-
+
+      - name: "[Tests] Run tests"
+        run: |
+          mix test
+
+      - name: "[Coverage] Capture coverage value"
+        id: coverage-value
+        run: |
+          RESULT=`mix coveralls.json --umbrella 2>&1 | awk '$1 == "[TOTAL]" { print $2 }' | awk '{gsub(/%/,""); print $0}'`
+          echo "COVERAGE_RESULT=${RESULT}" >> "$GITHUB_ENV"
+
+      - name: "[Coverage] Fail if coverage below 20%"
+        run: |
+          COVERAGE="${{ env.COVERAGE_RESULT }}"
+          if (( $(printf "%1.f" ${COVERAGE}) <= 20 )); then exit 1; fi
+
+
+  review:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "[Setup] Checkout code"
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: "[Setup] Setup Elixir"
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.VERSIONS_ELIXIR }}
+          otp-version: ${{ env.VERSIONS_OTP }}
+
+      - name: "[Setup] Cache Dependencies"
+        uses: actions/cache@v2
+        with:
+          path: |
+            deps
+            _build/test/lib
+          key: ${{ runner.os }}-${{ env.VERSIONS_ELIXIR }}-${{ env.VERSIONS_OTP }}-mix-test-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.VERSIONS_ELIXIR }}-${{ env.VERSIONS_OTP }}-mix-test-
+
+      - name: "[Setup] Install Dependencies"
+        run: mix deps.get
+
+      - name: "[Review] Run Credo"
+        run: |
+          mix credo suggest --strict
+
+  changelog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "[Setup] Checkout code"
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: "[Setup] Open /usr/local/bin Permissions"
+        run: sudo chmod -R a+rwx /usr/local/bin
+
+      - name: "[Setup] Cache Dependencies"
+        id: cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            /usr/local/bin/git-cl
+          key: ${{ runner.os }}-changelog-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+          restore-keys: |
+            ${{ runner.os }}-changelog-
+
+      - name: "[Changelog] Install build tools"
+        uses: fwal/setup-swift@v1
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          swift-version: "5.2"
+
+      - name: "[Changelog] Install git-ci"
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/
+          git clone https://github.com/uptech/git-cl.git git-cl
+          cd ./git-cl
+          make -j$(nproc)
+          sudo make install
+          sudo chmod a+rwx /usr/local/bin/git-cl
+          cd ${GITHUB_WORKSPACE}
+
+      - name: "[Changelog] Fail if no changelog entries"
+        run: |
+          # echo output for debugging
+          git cl unreleased | tail -n +4 | awk 'NF'
+          # test output and fail step if empty
+          [ "$(git cl unreleased | tail -n +4 | awk 'NF')" ] || exit 1
